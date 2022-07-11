@@ -1984,6 +1984,9 @@ class TestCase(expecttest.TestCase):
     def setUp(self):
         check_if_enable(self)
         set_rng_seed(SEED)
+        if TEST_CUDA:
+            torch.cuda.set_per_process_memory_fraction(.47)
+
 
     @staticmethod
     def _make_crow_indices(n_rows, n_cols, nnz,
