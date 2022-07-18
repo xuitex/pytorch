@@ -77,7 +77,7 @@ struct EventFieldsVisitor {
     });
 
     pushPythonMetadata(result->parent_.lock());
-    c10::visit(*this, result->extra_fields_);
+    result->visit(*this);
     handleStack(result->parent_);
   }
 
@@ -201,7 +201,7 @@ struct EventFieldsVisitor {
     };
 
     while (parent != nullptr) {
-      c10::visit(push, parent->extra_fields_);
+      parent->visit(push);
       parent = parent->parent_.lock();
     }
   }
