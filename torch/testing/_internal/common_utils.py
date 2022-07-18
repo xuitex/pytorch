@@ -695,39 +695,63 @@ def run_tests(argv=UNITTEST_ARGS):
         test_report_path = TEST_SAVE_XML + LOG_SUFFIX
         test_report_path = os.path.join(test_report_path, test_filename)
         if test_filename in PYTEST_FILES and not IS_SANDCASTLE:
-            # exclude linux cuda tests because we run into memory issues when running in parallel
-            import pytest
-            os.environ["NO_COLOR"] = "1"
-            os.environ["USING_PYTEST"] = "1"
-            pytest_report_path = test_report_path.replace('python-unittest', 'python-pytest')
-            os.makedirs(pytest_report_path, exist_ok=True)
-            # part of our xml parsing looks for grandparent folder names
-            pytest_report_path_parallel = os.path.join(pytest_report_path, f"{test_filename}-parallel.xml")
-            pytest_report_path_serial = os.path.join(pytest_report_path, f"{test_filename}-serial.xml")
-            print(f'Test results will be stored in {pytest_report_path_parallel}')
-            # mac slower on 4 proc than 3
-            num_procs = 2
-            exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), f'-n={num_procs}', '-vv', '-x', '-m=not serial',
-                                    '--reruns=2', '-rfEsX', f'--junit-xml-reruns={pytest_report_path_parallel}'])
-            sanitize_pytest_xml(f'{pytest_report_path_parallel}')
-            # exitcode of 5 means no tests were found, which happens for some test configs
-            if exit_code != 0 and exit_code != 5:
+            if os.environ["SHARD_NUMBER"] == "1":
+                os.makedirs(test_report_path, exist_ok=True)
+                verbose = '--verbose' in argv or '-v' in argv
+                unittest.main(argv=argv, testRunner=xmlrunner.XMLTestRunner(
+                    output=test_report_path,
+                    verbosity=2 if verbose else 1,
+                    resultclass=XMLTestResultVerbose))
+            if os.environ["SHARD_NUMBER"] == "2":
+                import pytest
+                os.environ["NO_COLOR"] = "1"
+                os.environ["USING_PYTEST"] = "1"
+                pytest_report_path = test_report_path.replace('python-unittest', 'python-pytest')
+                os.makedirs(pytest_report_path, exist_ok=True)
+                # part of our xml parsing looks for grandparent folder names
+                pytest_report_path_parallel = os.path.join(pytest_report_path, f"{test_filename}-parallel.xml")
+                pytest_report_path_serial = os.path.join(pytest_report_path, f"{test_filename}-serial.xml")
+                print(f'Test results will be stored in {pytest_report_path_parallel}')
+                # mac slower on 4 proc than 3
+                num_procs = 2
+                exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), f'-n={num_procs}', '-vv', '-x', '-m=not serial',
+                                        '--reruns=2', '-rfEsX', f'--junit-xml-reruns={pytest_report_path_parallel}'])
+                sanitize_pytest_xml(f'{pytest_report_path_parallel}')
+                # exitcode of 5 means no tests were found, which happens for some test configs
+                if exit_code != 0 and exit_code != 5:
+                    del os.environ["USING_PYTEST"]
+                    exit(exit_code)
+
+                exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), '-vv', '-x', '-m=serial',
+                                        '--reruns=2', '-rfEsX', f'--junit-xml-reruns={pytest_report_path_serial}'])
+                sanitize_pytest_xml(f'{pytest_report_path_serial}')
+
                 del os.environ["USING_PYTEST"]
-                exit(exit_code)
+            if os.environ["SHARD_NUMBER"] == "3":
+                import pytest
+                os.environ["NO_COLOR"] = "1"
+                os.environ["USING_PYTEST"] = "1"
+                pytest_report_path = test_report_path.replace('python-unittest', 'python-pytest')
+                os.makedirs(pytest_report_path, exist_ok=True)
+                # part of our xml parsing looks for grandparent folder names
+                pytest_report_path_parallel = os.path.join(pytest_report_path, f"{test_filename}-parallel.xml")
+                pytest_report_path_serial = os.path.join(pytest_report_path, f"{test_filename}-serial.xml")
+                print(f'Test results will be stored in {pytest_report_path_parallel}')
+                # mac slower on 4 proc than 3
+                num_procs = 3
+                exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), f'-n={num_procs}', '-vv', '-x', '-m=not serial',
+                                        '--reruns=2', '-rfEsX', f'--junit-xml-reruns={pytest_report_path_parallel}'])
+                sanitize_pytest_xml(f'{pytest_report_path_parallel}')
+                # exitcode of 5 means no tests were found, which happens for some test configs
+                if exit_code != 0 and exit_code != 5:
+                    del os.environ["USING_PYTEST"]
+                    exit(exit_code)
 
-            exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), '-vv', '-x', '-m=serial',
-                                    '--reruns=2', '-rfEsX', f'--junit-xml-reruns={pytest_report_path_serial}'])
-            sanitize_pytest_xml(f'{pytest_report_path_serial}')
+                exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), '-vv', '-x', '-m=serial',
+                                        '--reruns=2', '-rfEsX', f'--junit-xml-reruns={pytest_report_path_serial}'])
+                sanitize_pytest_xml(f'{pytest_report_path_serial}')
 
-            del os.environ["USING_PYTEST"]
-            os.makedirs(test_report_path, exist_ok=True)
-            verbose = '--verbose' in argv or '-v' in argv
-            unittest.main(argv=argv, testRunner=xmlrunner.XMLTestRunner(
-                output=test_report_path,
-                verbosity=2 if verbose else 1,
-                resultclass=XMLTestResultVerbose))
-
-            exit(0 if exit_code == 5 else exit_code)
+                del os.environ["USING_PYTEST"]
         else:
             os.makedirs(test_report_path, exist_ok=True)
             verbose = '--verbose' in argv or '-v' in argv
@@ -858,8 +882,8 @@ TEST_WITH_CROSSREF = os.getenv('PYTORCH_TEST_WITH_CROSSREF', '0') == '1'
 
 if (
     os.getenv("USING_PYTEST") == "1"
-    and "cuda" in os.environ["BUILD_ENVIRONMENT"]
     and "linux" in os.environ["BUILD_ENVIRONMENT"]
+    and TEST_CUDA
 ):
     torch.cuda.set_per_process_memory_fraction(0.35)
 
