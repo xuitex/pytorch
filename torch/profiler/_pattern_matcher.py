@@ -4,6 +4,7 @@ from typing import Dict, List, Set
 
 import torch
 from torch.profiler import profile
+import torch.utils.benchmark as benchmark
 from torch.profiler._utils import index_of_first_match
 from torch._C._autograd import (_ProfilerEvent, _ExtraFields_TorchOp,
                                 _ExtraFields_Backend, _ExtraFields_Allocation,
@@ -21,6 +22,7 @@ class Pattern:
 
     def __init__(self, prof: profile):
         self.prof = prof
+        self.name = "Please specify a name for pattern"
         self.description = "Please specify a description for pattern"
         assert prof.profiler is not None and prof.profiler.kineto_results is not None
         self.event_tree = prof.profiler.kineto_results.experimental_event_tree(
@@ -48,6 +50,9 @@ class Pattern:
             yield curr_event
             for child_event in curr_event.children:
                 stack.append(child_event)
+
+    def summary(self, events: List[_ProfilerEvent]):
+        return f"{self.name}: {len(events)} events matched."
 
     def match(self, event: _ProfilerEvent):
         '''
@@ -120,6 +125,7 @@ class ExtraCUDACopyPattern(Pattern):
 
     def __init__(self, prof: profile):
         super().__init__(prof)
+        self.name = "Extra CUDA Copy Pattern"
         self.description = "Filled a CPU tensor and immediately moved it to GPU. Please initalize it on GPU."
         self.init_ops = {
             "aten::fill_", "aten::zero_", "aten::normal_", "aten::uniform_"
@@ -127,7 +133,7 @@ class ExtraCUDACopyPattern(Pattern):
 
     @property
     def skip(self):
-        return self.prof.with_stack is False
+        return not self.prof.with_stack or not self.prof.record_shapes
 
     def match(self, event):
         # TODO: We should also check tensor identities
@@ -149,6 +155,33 @@ class ExtraCUDACopyPattern(Pattern):
         return event.name() in self.init_ops
         # TODO: Check if tensor is reused
 
+    def benchmark(self, events: List[_ProfilerEvent]):
+        shapes_factor_map = {input_shapes(event)[0]: 0.0 for event in events}
+        for shape in shapes_factor_map:
+            to_timer = benchmark.Timer(stmt='torch.ones(shape).to("cuda")',
+                                       globals={'shape': shape})
+            de_timer = benchmark.Timer(stmt='torch.ones(shape, device="cuda")',
+                                       globals={'shape': shape})
+            to_time = to_timer.timeit(10).mean
+            de_time = de_timer.timeit(10).mean
+            shapes_factor_map[shape] = de_time / to_time
+        return shapes_factor_map
+
+    def report(self, event: _ProfilerEvent):
+        msg = f"{self.description}\n{source_code_location(event)}"
+        return msg
+
+    def summary(self, events: List[_ProfilerEvent]):
+        shapes_factor_map = self.benchmark(events)
+        original_time = sum(event.duration_time_ns for event in events) / 1e3
+        new_time = sum(
+            shapes_factor_map[input_shapes(event)[0]] * event.duration_time_ns
+            for event in events) / 1e3
+        return (
+            f"{self.name}: {len(events)} events matched. "
+            f"Total Estimated Speedup: {original_time - new_time}us ({original_time/new_time}X)"
+        )
+
 
 class ForLoopIndexingPattern(Pattern):
     '''
@@ -169,6 +202,7 @@ class ForLoopIndexingPattern(Pattern):
 
     def __init__(self, prof: profile):
         super().__init__(prof)
+        self.name = "For Loop Indexing Pattern"
         self.description = "For loop indexing detected. Vectorization recommended."
         self.visited: Set[int] = set()
 
@@ -222,6 +256,7 @@ class FP32MatMulPattern(Pattern):
 
     def __init__(self, prof: profile):
         super().__init__(prof)
+        self.name = "FP32 MatMul Pattern"
         self.description = (
             "You are currently using GPU that supports TF32. "
             "Please enable TF32 by setting 'torch.backends.cuda.matmul.allow_tf32 = True'"
@@ -229,6 +264,7 @@ class FP32MatMulPattern(Pattern):
 
     @property
     def skip(self):
+        # Anything less than sm_80 is not Ampere which doesn't support TF32
         has_tf32 = all(
             int(arch[3:]) >= 80 for arch in torch.cuda.get_arch_list())
         return has_tf32 is False
@@ -246,6 +282,40 @@ class FP32MatMulPattern(Pattern):
     def report(self, event: _ProfilerEvent):
         return self.description
 
+    def benchmark(self, events: List[_ProfilerEvent]):
+        shapes_factor_map = {input_shapes(event): 0.0 for event in events}
+        for shape in shapes_factor_map:
+            matrixA = torch.randn(shape[0], device="cuda", dtype=torch.float32)
+            matrixB = torch.randn(shape[1], device="cuda", dtype=torch.float32)
+            fp32_timer = benchmark.Timer(stmt='torch.mm(matrixA, matrixB)',
+                                         globals={
+                                             "matrixA": matrixA,
+                                             "matrixB": matrixB
+                                         })
+            tf32_timer = benchmark.Timer(
+                stmt='torch.mm(matrixA, matrixB)',
+                setup='torch.backends.cuda.matmul.allow_tf32 = True',
+                globals={
+                    "matrixA": matrixA,
+                    "matrixB": matrixB
+                })
+            torch.backends.cuda.matmul.allow_tf32 = False
+            fp32_time = fp32_timer.timeit(10).mean
+            tf32_time = tf32_timer.timeit(10).mean
+            shapes_factor_map[shape] = tf32_time / fp32_time
+        return shapes_factor_map
+
+    def summary(self, events: List[_ProfilerEvent]):
+        shapes_factor_map = self.benchmark(events)
+        original_time = sum(event.duration_time_ns for event in events) / 1e3
+        new_time = sum(
+            shapes_factor_map[input_shapes(event)] * event.duration_time_ns
+            for event in events) / 1e3
+        return (
+            f"{self.name}: {len(events)} events matched. "
+            f"Total Estimated Speedup: {original_time - new_time}us ({original_time/new_time}X)"
+        )
+
 
 def source_code_location(event: _ProfilerEvent):
     while event:
@@ -259,6 +329,11 @@ def source_code_location(event: _ProfilerEvent):
     return "No source code location found"
 
 
+def input_shapes(event: _ProfilerEvent):
+    assert isinstance(event.extra_fields, _ExtraFields_TorchOp)
+    return tuple([tuple(shape) for shape in event.extra_fields.inputs.shapes])
+
+
 def report_all_anti_patterns(prof):
     anti_patterns = [
         ExtraCUDACopyPattern(prof),
@@ -266,13 +341,22 @@ def report_all_anti_patterns(prof):
         FP32MatMulPattern(prof)
     ]
     reported = set()
-    print(f"{'-'*40}TorchTidy Report{'-'*40}")
+    summaries = []
+    message_list = [f"{'-'*40}TorchTidy Report{'-'*40}"]
+    message_list.append("Matched Events:")
     for anti_pattern in anti_patterns:
-        for event in anti_pattern.matched_events():
+        matched_events = anti_pattern.matched_events()
+        if matched_events:
+            summaries.append(anti_pattern.summary(matched_events))
+        for event in matched_events:
             report_msg = anti_pattern.report(event)
             if report_msg not in reported:
-                print(report_msg)
+                message_list.append(report_msg)
                 reported.add(report_msg)
+    message_list.append("Summary:")
+    message_list += summaries
+    message_list.append(f"{'-'*40}TorchTidy Report{'-'*40}")
+    print("\n".join(message_list))
 
 
 def event_type(event: _ProfilerEvent):
