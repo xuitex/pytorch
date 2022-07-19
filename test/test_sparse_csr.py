@@ -1201,7 +1201,7 @@ class TestSparseCSR(TestCase):
                 csr.matmul(bad_vec)
 
     @onlyCUDA
-    @unittest.skipIf(not CUDA11OrLater or TEST_WITH_ROCM, "Only CUDA 11+ is supported")
+    @unittest.skipIf(not (CUDA11OrLater or TEST_WITH_ROCM), "Only CUDA 11+ is supported")
     @skipCUDAIfRocmVersionLessThan((5, 2))
     @dtypes(torch.float32, torch.float64, torch.complex64, torch.complex128)
     def test_baddbmm(self, device, dtype):
@@ -1236,7 +1236,7 @@ class TestSparseCSR(TestCase):
                     run_test(c, a, a_batched, b, op_b, op_out, dtype=dtype, device=device)
 
     @onlyCUDA
-    @unittest.skipIf(not CUDA11OrLater or TEST_WITH_ROCM, "Only CUDA 11+ is supported")
+    @unittest.skipIf(not (CUDA11OrLater or TEST_WITH_ROCM), "Only CUDA 11+ is supported")
     @skipCUDAIfNoSparseGeneric
     @dtypes(torch.float32, torch.float64, torch.complex64, torch.complex128)
     def test_bmm(self, device, dtype):
