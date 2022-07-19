@@ -19,6 +19,7 @@ from torch.overrides import has_torch_function, handle_torch_function
 import torch.library
 from torch.utils._pytree import tree_map, tree_flatten, tree_unflatten
 from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+from torch._meta_registrations import register_meta
 
 import contextlib
 from typing import Sequence, Optional, Union, Callable, List, Tuple, Any, Type
@@ -1321,6 +1322,8 @@ as_strided = _make_prim(
     doc=_as_strided_doc,
 )
 
+from torch.fx.experimental.symbolic_shapes import create_contiguous
+
 
 def _broadcast_in_dim_meta(
     a: TensorLikeType, shape: ShapeType, broadcast_dimensions: Sequence[int]
@@ -1403,7 +1406,7 @@ _broadcast_in_dim_doc = """
   """
 
 broadcast_in_dim = _make_prim(
-    schema="broadcast_in_dim(Tensor(a) a, int[] shape, int[] broadcast_dimensions) -> Tensor(a)",
+    schema="broadcast_in_dim(Tensor(a) a, SymInt[] shape, int[] broadcast_dimensions) -> Tensor(a)",
     meta=_broadcast_in_dim_meta,
     impl_aten=_broadcast_in_dim_aten,
     impl_nvfuser=_broadcast_in_dim_nvfuser,
