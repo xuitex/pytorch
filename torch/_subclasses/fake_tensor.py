@@ -444,15 +444,6 @@ class FakeTensorMode(TorchDispatchMode):
             else:
                 return args[0].fake_device
 
-        # prims already wrap FakeTensor inputs to FakeTensor outputs
-        # and do device logic, we dont need do anything but run them
-        if "prims::" in func._schema.name:
-            with no_dispatch():
-                return func(*args, **kwargs)
-
-        with no_dispatch():
-            # TODO: apply as no_dispatch decorator
-            converter = self.fake_tensor_converter
 
             def wrap(e, device=None):
                 if isinstance(e, torch.Tensor) and not isinstance(e, FakeTensor):
