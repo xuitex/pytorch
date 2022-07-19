@@ -707,8 +707,8 @@ def run_tests(argv=UNITTEST_ARGS):
             pytest_report_path = os.path.join(pytest_report_path, f"{test_filename}.xml")
             print(f'Test results will be stored in {pytest_report_path}')
             # mac slower on 4 proc than 3
-            num_procs = 3 if "macos" in os.environ["BUILD_ENVIRONMENT"] else 4
-            exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), f'-n={num_procs}', '-vv', '-x',
+            num_procs = 1
+            exit_code = pytest.main(args=[inspect.getfile(sys._getframe(1)), '-vv', '-x',
                                     '--reruns=2', '-rfEsX', f'--junit-xml-reruns={pytest_report_path}'])
             del os.environ["USING_PYTEST"]
             sanitize_pytest_xml(f'{pytest_report_path}')
